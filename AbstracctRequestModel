@@ -1,0 +1,167 @@
+<?php
+/**
+ * 调拨抽象类
+ */
+abstract class AbstractAllocation
+{
+    private $_response;
+    private $_responseData;
+    private $_request;
+    private $_requestData;
+    private $_serviceName;
+    private $_error;
+    public $limiter = '/';
+    public $requestData;
+
+    public function __construct()
+    {
+        $this->_request = new \stdClass();
+        $this->_response = new \stdClass();
+    }
+
+    /**
+     * 提交请求
+     * @param string $serviceName 接口服务名称
+     * @param mixed $requestData  接口请求的data部分数据
+     * @return static the object itself
+     * @throws InvalidConfigException 如果未设置接口服务名
+     */
+    public function submitRequest($serviceName, $requestData)
+    {
+        is_null($serviceName) or $this->setServiceName($serviceName);
+        is_null($requestData) or $this->setRequestData($requestData);
+
+        if ($this->_serviceName == null) {
+            throw new \InvalidArgumentException('The "serviceName" property must be set.');
+        }
+
+        $requestAddress = HOST_URL_API . $this->limiter . $this->_serviceName;
+        try {
+            $this->_setRequest();
+            $result = curl_get_json($requestAddress, json_encode($this->getRequestData()));
+            $this->_setResponse(json_decode($result));
+            $this->_catchMe();
+        } catch (\Exception $e) {
+            $this->_error = sprintf('Exception: (%s)%s', $e->getCode(), $e->getMessage());
+        }
+
+        return $this;
+    }
+
+    /**
+     * 接口request部分
+     */
+    public function getRequest()
+    {
+        return $this->_request;
+    }
+
+    public function getRequestData()
+    {
+        return $this->_requestData;
+    }
+
+    public function setRequestData($data)
+    {
+        $this->_requestData = $data;
+    }
+
+    private function _setRequest()
+    {
+        $this->_request->data = is_null($this->getRequestData())?'':$this->getRequestData();
+    }
+
+    /**
+     * 接口response部分
+     */
+    public function getResponse()
+    {
+        return $this->_response;
+    }
+
+    public function getResponseData()
+    {
+        return $this->_responseData;
+    }
+
+    public function getResponseSuccess()
+    {
+        return isset($this->_response->code) and $this->_response->code == 2000;
+    }
+
+    public function getResponseErrorCode()
+    {
+        if ($this->_error) return 1000;
+        return isset($this->_response->code)?$this->_response->code:null;
+    }
+
+    public function getResponseErrorMessage()
+    {
+        if ($this->_error) return $this->_error;
+        return isset($this->_response->msg)?$this->_response->msg:null;
+    }
+
+    private function _setResponse($result)
+    {
+        if (is_object($result)) {
+            $attribute = 'data';
+            $this->_response = $result;
+            $this->_responseData = $result->_response->data;
+        }
+    }
+
+    /**
+     * 服务名称，资源地址名
+     */
+    public function setServiceName($name)
+    {
+        $this->_serviceName = $name;
+    }
+
+    public function getServiceName()
+    {
+        return $this->_serviceName;
+    }
+
+    /**
+     * 返回错误信息数组对象
+     */
+    public function getError()
+    {
+        return (object)['code' => $this->getResponseCode(), 'message' => $this->getResponseMessage()];
+    }
+
+    private function _catchMe()
+    {
+        $log = new \stdClass();
+        $log->apiName = $this->getServiceName();
+        $log->apiRequest = print_r($this->getRequest(), true);
+        $log->apiResponse = print_r($this->getResponse(), true);
+        // 数据准备
+        $_request = clone $this->getRequest();
+        $_response = clone $this->getResponse();
+        $trace = debug_backtrace(0);
+        $txt = "\n------------------------------------------------------------------";
+        $txt .= "\n@@@时间：".$log->datetime = date('Y-m-d H:i:s');
+        $txt .= "\n@@@来源：".$log->ip = (isset($_SERVER['HTTP_X_FORWARDED_FOR'])?$_SERVER['HTTP_X_FORWARDED_FOR']:$_SERVER['REMOTE_ADDR']);
+        $txt .= "\n@@@方法：".$log->method = $_SERVER["REQUEST_METHOD"];
+        $txt .= "\n@@@目标：".$log->url = $_SERVER["REQUEST_URI"];
+        $txt .= "\n@@@接口：".$log->apiWsdl = $this->wsdl;
+        $txt .= "\n@@@调用：".$log->callback = sprintf('%s::%s (line:%s)', @$trace[2]['class'], @$trace[2]['function'], @$trace[1]['line']);
+        $txt .= "\n@@@成功：".$log->apiIsok = (int)$this->getResponseSuccess();
+        $txt .= "\n@@@页面变量(GET)：\n".$log->varGet = print_r($_GET, true);
+        $txt .= "@@@页面变量(POST)：\n".$log->varPost = print_r($_POST, true);
+        if (strlen(print_r($_request->Data, true)) > 1024) $_request->Data = '(隐藏了超长的数据...)';
+        $txt .= "@@@接口".$this->getServiceName()."请求(Request)：\n".print_r($_request, true);
+        if (strlen(print_r($_response->Data, true)) > 1024) $_response->Data = '(隐藏了超长的数据...)';
+        $txt .= "@@@接口".$this->getServiceName()."返回(Response)：\n".print_r($_response, true);
+        $txt .= "\n******************************************************************";
+        // 保存到日志文件
+        $file = RUNTIME_PATH . $this->limiter . 'logs/api.log';
+        fclose(fopen($file, 'a+'));
+        $_fo = fopen($file, 'rb');
+        $old = fread($_fo, 1024 * 1024);
+        fclose($_fo);
+        file_put_contents($file, $txt.$old);
+    }
+}
